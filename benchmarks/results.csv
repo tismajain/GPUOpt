@@ -1,0 +1,5 @@
+stage,kernel,N,time_ms,gflops,percent_cublas,max_abs_diff
+5,coalesced,1024,6.033,355.932,5.891,0.000000
+5,shared_tiled,1024,2.656,808.492,13.382,0.000000
+5,register_blocked_4x4,1024,0.731,2937.188,48.617,0.000000
+5,cublas_sgemm,1024,0.355,6041.489,100.000,0.000000
