@@ -1,669 +1,211 @@
 # GPUOpt
 
-GPUOpt is a staged CUDA performance-engineering project that progresses from cache locality, coalescing, shared-memory tiling, and register blocking to a real GPU-resident YOLO inference pipeline. The final system uses NVDEC and fused CUDA preprocessing to reduce end-to-end latency by **24.4%** and increase throughput from **83.7 to 110.7 FPS** on an NVIDIA Tesla T4.
+GPUOpt is a staged CUDA performance-engineering project that progresses from cache locality, memory coalescing, shared-memory tiling, and register blocking to a real GPU-resident YOLO inference pipeline.
 
-The main goal is not just to make individual CUDA kernels faster, but to understand **where the bottleneck moves after each optimization**.
+The final system uses **NVIDIA NVDEC + GPU-resident RGBP + fused CUDA preprocessing** to reduce end-to-end latency by **24.4%** and increase throughput from **83.7 to 110.7 FPS** on an NVIDIA Tesla T4.
+
+The central idea of the project is simple:
+
+> **Optimizing the current bottleneck often reveals the next one.**
+
+---
+
+## Final architecture
+
+```mermaid
+flowchart LR
+    A[H.264 video] --> B[NVIDIA NVDEC]
+    B --> C[GPU-resident RGBP]
+    C --> D[Fused CUDA preprocessing]
+    D --> E[YOLOv8n inference]
+    D -. resize .-> D
+    D -. letterbox .-> D
+    D -. normalize + CHW .-> D
+```
+
+## Bottleneck evolution
+
+```mermaid
+flowchart LR
+    A[Coalescing] --> B[Shared-memory tiling]
+    B --> C[Register blocking]
+    C --> D[Fused CV preprocessing]
+    D --> E[25.65× preprocessing-kernel speedup]
+    E --> F[PCIe transfer becomes bottleneck]
+    F --> G[Pinned memory + overlap]
+    G --> H[NVDEC GPU-resident pipeline]
+    H --> I[24.4% lower end-to-end latency]
+```
 
 ---
 
 ## Highlights
 
-- Improved CUDA memory access performance by ~**4.0×** through coalescing.
-- Shared-memory tiling delivered a further ~**2.5×** speedup over the coalesced implementation.
-- Register-blocked GEMM reached approximately **56% of cuBLAS performance** at 1024×1024 on an NVIDIA Tesla T4.
-- Fused real-video preprocessing achieved a **3.18× speedup** on 1920×1080 @ 50 FPS video.
-- Fused YOLO preprocessing reduced compute from **1.615 ms to 0.063 ms**, a **25.65× kernel-level speedup**.
+- CUDA memory coalescing: **~4.0×** speedup over strided access.
+- Shared-memory tiling: another **~2.5×** improvement.
+- Register-blocked GEMM: approximately **56% of cuBLAS** performance at 1024×1024.
+- Real-video fused preprocessing: **3.18×** median speedup.
+- YOLO preprocessing compute: **1.615 ms → 0.063 ms**, a **25.65× kernel-level speedup**.
+- Stage 9 exposed PCIe HtoD transfer as the new bottleneck; end-to-end gain was only **1.002×**.
 - Pinned memory reduced raw HtoD DMA latency by **2.23×**.
-- Transfer/inference overlap improved steady-state throughput by approximately **8.7%**.
-- Final NVDEC + GPU-resident preprocessing reduced end-to-end latency from **11.95 ms to 9.03 ms**.
-- Final throughput improved from **83.7 FPS to 110.7 FPS**, a **1.323× end-to-end speedup**.
-- Final RGBP path preserved **100/100 detection-count and class-sequence agreement** across the validation set.
+- Transfer/inference overlap improved **steady-state throughput by ~8.7%**.
+- Final NVDEC pipeline: **11.9476 ms → 9.0324 ms** end-to-end latency.
+- Final throughput: **83.70 → 110.71 FPS**.
+- Final RGBP pipeline preserved **100/100 detection-count and class-sequence agreement**.
 
 ---
 
-## Hardware and Environment
+## Project progression
 
-Experiments were primarily run on:
-
-- GPU: NVIDIA Tesla T4
-- CUDA Toolkit: 12.8
-- Driver: 580.178.04
-- PyTorch: 2.11.0 + CUDA 12.8
-- Ultralytics: 8.4.183
-- Nsight Compute: 2025.1.1
-- Environment: Kaggle GPU notebook
-
-Some hardware-performance-counter profiling was unavailable because the Kaggle environment returned:
-
-```text
-ERR_NVGPUCTRPERM
-```
-
-Profiler-dependent metrics were therefore not inferred or fabricated.
-
----
-
-# Project Progression
-
-| Stage | Focus | Key Result |
+| Stage | Focus | Key result |
 |---|---|---|
-| 1 | CPU blocked matrix multiplication | Best configuration reached ~7.86 GFLOP/s |
-| 2 | CUDA memory coalescing | ~4.0× faster than strided global-memory access |
-| 3 | Shared-memory tiling | ~2.5× improvement over coalesced baseline |
-| 4 | Register blocking | Higher arithmetic reuse and significantly improved GEMM throughput |
-| 5 | cuBLAS comparison | ~56% of cuBLAS performance at 1024×1024 |
-| 6 | Nsight Compute profiling | Blocked by restricted GPU performance-counter access |
-| 7 | Fused CV preprocessing | Combined resize, normalization, and layout conversion |
-| 8 | Real-video preprocessing | 3.18× median speedup on 1920×1080 video |
-| 9 | Real YOLO integration | 25.65× preprocessing-kernel speedup; PCIe became bottleneck |
-| 10 | GPU-resident NVDEC pipeline | 24.4% lower end-to-end latency; 83.7 → 110.7 FPS |
+| [1](cpu/cpu_blocked.cpp) | CPU blocked matrix multiplication | Best block size reached ~7.86 GFLOP/s |
+| [2](cuda/stage2_coalescing.cu) | CUDA memory coalescing | ~4.0× faster than strided global-memory access |
+| [3](cuda/stage3_tiled.cu) | Shared-memory tiling | ~2.48× over coalesced baseline |
+| [4](cuda/stage4_register_blocking.cu) | Register blocking | Higher arithmetic reuse with increased register pressure |
+| [5](cuda/stage5_cublas_benchmark.cu) | cuBLAS comparison | ~56% of cuBLAS at 1024×1024 |
+| [6](cuda/stage6_profiling/) | Nsight Compute profiling | Hardware counters blocked by Kaggle permissions |
+| [7–8](cuda/stage7_8_fused_real_video/) | Fused CV + real-video preprocessing | 3.18× median speedup on 1920×1080 video |
+| [9](cuda/stage9_yolo_integration/) | Real YOLO integration | 25.65× preprocessing-kernel speedup; PCIe became bottleneck |
+| [10](cuda/stage10_gpu_resident_pipeline/) | GPU-resident NVDEC pipeline | **24.4% lower end-to-end latency; 83.7 → 110.7 FPS** |
 
 ---
 
-# Stage 1 — CPU Blocked Matrix Multiplication
+## Stage 1 — CPU blocked matrix multiplication
 
-The project begins with a CPU blocked matrix-multiplication baseline.
+Blocking improves cache reuse before moving to GPU-specific optimization.
 
-Blocking improves cache reuse by processing matrices in smaller tiles instead of repeatedly traversing large regions of memory.
-
-For:
-
-```text
-N = 1024
-```
-
-the measured results were approximately:
-
-| Block Size | Time | Performance |
+| Block size | Time | Performance |
 |---:|---:|---:|
 | 16 | 443.9 ms | 4.84 GFLOP/s |
 | 32 | 361.0 ms | 5.95 GFLOP/s |
 | 64 | 273.4 ms | 7.86 GFLOP/s |
 
-This establishes the basic idea that data locality matters before moving to GPU-specific optimizations.
+Source: [`cpu/cpu_blocked.cpp`](cpu/cpu_blocked.cpp)
 
 ---
 
-# Stage 2 — CUDA Memory Coalescing
+## Stages 2–5 — GPU matrix-multiplication optimization
 
-The first CUDA experiment isolates global-memory access behavior.
+The CUDA GEMM experiments isolate progressively deeper optimization ideas:
 
-Two kernels perform similar work but access memory differently:
+1. **Coalescing** — adjacent threads access contiguous global memory.
+2. **Shared-memory tiling** — reused matrix tiles reduce repeated global-memory loads.
+3. **Register blocking** — each thread computes multiple outputs for higher arithmetic reuse.
+4. **cuBLAS comparison** — the custom kernel is compared against a production library.
 
-- poorly coalesced access
-- coalesced access
-
-At 1024×1024:
-
-| Kernel | Time | Performance |
-|---|---:|---:|
-| Strided / bad access | 17.92 ms | 119.8 GFLOP/s |
-| Coalesced | 4.46 ms | 481.3 GFLOP/s |
-
-Result:
-
-```text
-~4.0× speedup
-```
-
-This demonstrates how strongly GPU performance depends on how adjacent threads access global memory.
+At 1024×1024, the register-blocked implementation sustained roughly **2872–2889 GFLOP/s** versus **4902–5140 GFLOP/s** for cuBLAS, reaching approximately **56% of cuBLAS performance**.
 
 ---
 
-# Stage 3 — Shared-Memory Tiling
+## Stage 6 — Profiling limitation
 
-The next step uses shared memory to reuse matrix tiles across multiple operations.
-
-Instead of repeatedly reading the same values from global memory, each thread block loads a tile into shared memory and performs multiple operations using the cached data.
-
-At 1024×1024:
-
-| Kernel | Time | Performance |
-|---|---:|---:|
-| Coalesced | 6.24 ms | 344.2 GFLOP/s |
-| Shared-memory tiled | 2.51 ms | 854.5 GFLOP/s |
-
-Result:
-
-```text
-~2.48× speedup over the coalesced implementation
-```
-
----
-
-# Stage 4 — Register Blocking
-
-The tiled kernel was extended with register blocking.
-
-Each thread computes multiple output values and reuses loaded data through registers.
-
-PTXAS resource usage on `sm_75`:
-
-| Kernel | Registers | Shared Memory |
-|---|---:|---:|
-| Tiled | 39 | ~2 KB |
-| Register blocked | 72 | ~8 KB |
-
-This introduced a tradeoff:
-
-- more per-thread reuse
-- fewer global-memory operations
-- increased register usage
-- potentially reduced occupancy
-
-The resulting throughput improvement showed that higher per-thread work could outperform the simpler tiled design despite using more GPU resources.
-
----
-
-# Stage 5 — Comparison Against cuBLAS
-
-The register-blocked implementation was compared against NVIDIA cuBLAS.
-
-For 1024×1024 matrix multiplication, repeated measurements showed approximately:
-
-```text
-Register blocked: ~2872–2889 GFLOP/s
-cuBLAS:           ~4902–5140 GFLOP/s
-```
-
-The custom CUDA implementation therefore reached approximately:
-
-```text
-~56% of cuBLAS performance
-```
-
-At 512×512:
-
-```text
-Register blocked: ~1209.9 GFLOP/s
-~57.3% of cuBLAS
-```
-
-This stage provides a realistic reference point against a heavily optimized production library.
-
----
-
-# Stage 6 — Nsight Compute Profiling
-
-The next planned step was to profile the register-blocked kernel with NVIDIA Nsight Compute and inspect:
-
-- achieved occupancy
-- memory throughput
-- cache utilization
-- warp stall reasons
-- arithmetic intensity
-- instruction-level behavior
-
-However, Kaggle did not expose NVIDIA GPU hardware performance counters.
-
-Nsight Compute returned:
+Nsight Compute was available, but Kaggle did not expose NVIDIA hardware performance counters:
 
 ```text
 ERR_NVGPUCTRPERM
 ```
 
-Rather than infer profiler metrics, the limitation is documented explicitly.
+Profiler-dependent occupancy, cache, and warp-stall metrics were therefore **not inferred or fabricated**.
 
-Future profiling should be repeated on a machine with performance-counter access.
-
----
-
-# Stage 7 — Fused Computer-Vision Preprocessing
-
-The project then moved from synthetic GEMM benchmarks to a practical CV workload.
-
-A YOLO-style preprocessing pipeline was implemented with multiple operations:
-
-```text
-resize
-→ normalization
-→ HWC to CHW conversion
-→ float conversion
-```
-
-The baseline used multiple kernels and intermediate buffers.
-
-A custom fused CUDA implementation performs the operations in one kernel.
-
-Measured on 1920×1080 input converted to 640×640:
-
-| Pipeline | Median Time |
-|---|---:|
-| Baseline, 3 kernels | 0.1618 ms |
-| Fused, 1 kernel | 0.0576 ms |
-
-Result:
-
-```text
-~2.7–3.0× speedup
-```
-
-The fused implementation also avoided approximately:
-
-```text
-18.75 MB/frame
-```
-
-of intermediate memory traffic.
-
-Correctness:
-
-```text
-Max difference = 0.0
-```
+See [`cuda/stage6_profiling/`](cuda/stage6_profiling/).
 
 ---
 
-# Stage 8 — Real Video Benchmark
+## Stages 7–8 — Fused real-video preprocessing
 
-The fused preprocessing path was tested on a real boxing video:
+The project then moved from synthetic GEMM to a practical CV workload.
 
-```text
-Resolution: 1920×1080
-Frame rate: 50 FPS
-Frames benchmarked: 300
-```
-
-Results:
+A fused CUDA kernel combined preprocessing operations and avoided intermediate memory traffic. On a real **1920×1080 @ 50 FPS** boxing video:
 
 | Pipeline | Median | p95 |
 |---|---:|---:|
 | Baseline | 0.1471 ms | 0.1564 ms |
 | Fused | 0.0460 ms | 0.0513 ms |
 
-Median speedup:
+Result: **3.18× median speedup**, with `max difference = 0.0`.
 
-```text
-3.18×
-```
-
-Approximate saving:
-
-```text
-~0.10 ms/frame
-```
-
-Correctness remained:
-
-```text
-Max difference = 0.0
-```
-
-This stage demonstrated that the fused-kernel speedup also held on real video rather than only on synthetic data.
+See [`cuda/stage7_8_fused_real_video/`](cuda/stage7_8_fused_real_video/).
 
 ---
 
-# Stage 9 — Real YOLO Inference Integration
+## Stage 9 — Real YOLO integration and the PCIe bottleneck
 
-The next step was integrating the custom CUDA preprocessing path into an actual YOLOv8n inference pipeline.
+Ultralytics' actual rectangular input for the video is **640×384** after resize and letterboxing. The custom CUDA kernel reproduces bilinear resize, padding, BGR→RGB, HWC→CHW, float conversion, and `/255` normalization.
 
-Input video:
+Preprocessing correctness:
 
-```text
-1920×1080
-50 FPS
-YOLOv8n
-NVIDIA Tesla T4
-```
+- Max absolute difference: **5.96e-08**
+- Mean absolute difference: **1.25e-08**
+- Detection counts matched on **100/100** frames
 
-## Actual YOLO Input Geometry
-
-Ultralytics performs rectangular inference rather than forcing this video into 640×640.
-
-The real preprocessing path is:
-
-```text
-1920×1080
-     ↓
-resize to 640×360
-     ↓
-12 px top padding
-12 px bottom padding
-     ↓
-640×384 input
-```
-
-The custom CUDA kernel reproduces:
-
-- bilinear resize
-- YOLO letterboxing
-- padding value 114
-- BGR → RGB
-- HWC → CHW
-- uint8 → float32
-- `/255` normalization
-
-in a single kernel.
-
----
-
-## Preprocessing Correctness
-
-The custom CUDA preprocessing tensor was compared directly against Ultralytics preprocessing.
-
-Results:
-
-```text
-Max absolute difference  : 5.96e-08
-Mean absolute difference : 1.25e-08
-```
-
-The tensors were effectively numerically identical.
-
----
-
-## Raw YOLO Output Equivalence
-
-Both tensors were passed through YOLOv8n.
-
-Model output shape:
-
-```text
-1 × 84 × 5040
-```
-
-Results:
-
-```text
-Max raw-output difference  : 8.54e-04
-Mean raw-output difference : 7.20e-07
-Allclose                   : True
-```
-
----
-
-## Post-NMS Detection Equivalence
-
-Detection equivalence was validated across 100 real video frames.
-
-Results:
-
-```text
-Matching detection counts       : 100 / 100
-Detection-count match rate      : 100%
-Maximum detection-count diff    : 0
-Maximum confidence difference   : 1.85e-06
-Maximum box-coordinate diff     : 0.000427 px
-Mean box-coordinate difference  : 0.000024 px
-```
-
-This confirms that the custom preprocessing path produces effectively identical detections.
-
----
-
-# YOLO Preprocessing Performance
-
-The baseline Ultralytics preprocessing path was compared against the fused CUDA kernel.
-
-| Path | Median | p95 |
-|---|---:|---:|
-| Ultralytics preprocessing | 1.6152 ms | 1.7981 ms |
-| HtoD transfer only | 1.4866 ms | 1.5978 ms |
-| Fused CUDA kernel only | 0.0630 ms | 0.0769 ms |
-| HtoD + fused kernel | 1.6014 ms | 1.7363 ms |
-
-Kernel-level speedup:
-
-```text
-1.6152 / 0.0630 ≈ 25.65×
-```
-
-However:
-
-```text
-Full preprocessing speedup ≈ 1.01×
-```
-
-The fused kernel itself was no longer the bottleneck.
-
----
-
-# End-to-End YOLO Result
-
-Preprocessing plus YOLO model inference was benchmarked separately.
-
-## Baseline
-
-```text
-Preprocessing           : 1.6278 ms
-Inference               : 8.0061 ms
-Preprocess + inference  : 9.6371 ms
-```
-
-## Custom CUDA Path
-
-```text
-HtoD + fused preprocess : 1.5842 ms
-Inference               : 8.0342 ms
-Preprocess + inference  : 9.6181 ms
-```
-
-Result:
-
-```text
-Overall speedup: 1.002×
-```
-
-Theoretical model-pipeline throughput:
-
-```text
-Baseline : 103.77 FPS
-Custom   : 103.97 FPS
-```
-
----
-
-# Bottleneck Analysis
-
-The fused kernel reduced preprocessing compute from:
-
-```text
-1.615 ms
-```
-
-to:
-
-```text
-0.063 ms
-```
-
-Yet the full pipeline barely improved.
-
-The reason is the data path.
-
-## Ultralytics
-
-```text
-CPU decoded frame
-      ↓
-CPU resize + letterbox
-      ↓
-smaller tensor
-      ↓
-HtoD
-      ↓
-YOLO
-```
-
-## Custom CUDA
-
-```text
-CPU decoded 1920×1080 frame
-      ↓
-HtoD full-resolution frame
-      ↓
-fused CUDA preprocessing
-      ↓
-YOLO
-```
-
-Moving the full 1920×1080 BGR frame to the GPU costs approximately:
-
-```text
-1.49 ms/frame
-```
-
-That transfer dominates the custom preprocessing path.
-
-The optimization therefore shifted the bottleneck from:
-
-```text
-preprocessing compute
-```
-
-to:
-
-```text
-host-to-device data movement
-```
-
-This is the main systems-level finding from Stage 9.
-
----
-
-# Stage 10 — GPU-Resident Pipeline
-
-Stage 10 removes or hides the host-to-device transfer bottleneck identified in Stage 9.
-
-## 10A — Pinned Host Memory
-
-Page-locked host memory was used to reduce HtoD transfer latency.
+Performance:
 
 | Path | Median |
 |---|---:|
-| Pageable HtoD | 1.4709 ms |
-| Pinned HtoD DMA | 0.6598 ms |
-| CPU staging + pinned HtoD | 1.0113 ms |
+| Ultralytics preprocessing | 1.6152 ms |
+| HtoD transfer only | 1.4866 ms |
+| Fused CUDA kernel only | 0.0630 ms |
+| HtoD + fused kernel | 1.6014 ms |
 
-Results:
+The kernel became **25.65× faster**, but full preprocessing improved only ~**1.01×**, and preprocessing + inference only **1.002×**.
 
-- Raw DMA speedup: **2.23×**
-- Real staged-path speedup: **1.45×**
+The optimization had moved the bottleneck to transferring the full-resolution frame over PCIe.
 
-## 10B — Transfer / Inference Overlap
+See [`cuda/stage9_yolo_integration/`](cuda/stage9_yolo_integration/).
 
-Double buffering and separate CUDA streams were used to overlap transfer of frame N+1 with inference of frame N.
+---
 
-| Pipeline | Time / Frame | Throughput |
-|---|---:|---:|
-| Sequential pinned | 9.8045 ms | 101.99 FPS |
-| Overlapped | 9.0194 ms | 110.87 FPS |
+## Stage 10 — Removing the PCIe bottleneck
 
-Steady-state throughput improved by approximately **8.7%**.
+Stage 10 follows the bottleneck through several system-level experiments:
 
-## 10C — NVDEC GPU Video Decode
+- **10A — Pinned memory:** raw DMA improved **2.23×**; real staged path improved **1.45×**.
+- **10B — Transfer/inference overlap:** steady-state throughput improved from **101.99 to 110.87 FPS** (**~8.7%**). The reported `9.0194 ms/frame` is a **steady-state average throughput equivalent**, not the same metric as the final synchronous per-frame latency median.
+- **10C — NVDEC:** H.264 video decode moved onto NVIDIA's hardware decoder.
+- **10D — Direct NV12 fusion:** rejected after failing the correctness gate (**64/100** detection-count agreement).
+- **10E — RGBP GPU-resident path:** passed the correctness gate with **100/100** detection-count and class-sequence agreement.
+- **10F — Final apples-to-apples benchmark:** GPU-resident decode + preprocessing produced the real application-level improvement.
 
-The H.264 boxing video was decoded using NVIDIA NVDEC through PyNvVideoCodec, keeping decoded frames GPU-resident and removing full-resolution CPU→GPU frame transfer from the critical path.
-
-```text
-H.264 bitstream
-      ↓
-NVDEC
-      ↓
-GPU-resident decoded frame
-      ↓
-CUDA preprocessing
-      ↓
-YOLO
-```
-
-## 10D — Direct NV12 Fusion Attempt
-
-A direct NV12 → YOLO fused CUDA path was tested.
-
-Across 100 frames:
-
-- Detection-count agreement: **64%**
-- Class-sequence agreement: **40%**
-
-Because it failed the correctness gate, this implementation was not used in the final system.
-
-## 10E — GPU-Resident RGBP Pipeline
-
-PyNvVideoCodec was configured to produce GPU-resident planar RGB output. The fused CUDA kernel then performs bilinear resize, YOLO letterboxing, uint8 → float32 conversion, normalization, and CHW output without returning the frame to CPU memory.
-
-Final architecture:
-
-```text
-H.264
-  ↓
-NVDEC
-  ↓
-GPU RGBP
-  ↓
-fused CUDA preprocessing
-  ↓
-YOLO
-```
-
-Correctness across 100 frames:
-
-- Detection-count agreement: **100/100**
-- Class-sequence agreement: **100/100**
-- Maximum confidence difference: **2.74e-06**
-- Maximum box-coordinate difference: **0.000214 px**
-- Mean box-coordinate difference: **0.000005 px**
-
-## 10F — Final End-to-End Benchmark
-
-Both pipelines were benchmarked using the same video, model, inference path, and frame count.
+### Final benchmark
 
 | Pipeline | Decode | Preprocess | Inference | Total | Throughput |
 |---|---:|---:|---:|---:|---:|
 | OpenCV / CPU | 1.7824 ms | 1.6755 ms | 8.4286 ms | **11.9476 ms** | **83.70 FPS** |
 | NVDEC / GPU-resident | 0.2619 ms | 0.1319 ms | 8.6284 ms | **9.0324 ms** | **110.71 FPS** |
 
-Final result:
+**Final system result:**
 
 - **24.40% lower end-to-end latency**
 - **1.323× end-to-end speedup**
 - **83.70 → 110.71 FPS**
 - full detection equivalence across the validation set
 
----
-
-# Key Takeaways
-
-This project progressively exposed several CUDA optimization principles:
-
-### Memory access can dominate arithmetic
-
-Coalescing alone produced a major improvement without changing the mathematical operation.
-
-### Shared memory improves reuse
-
-Tiling reduced repeated global-memory access and substantially increased throughput.
-
-### Registers introduce tradeoffs
-
-Register blocking increased per-thread reuse but also increased register pressure.
-
-### Kernel fusion reduces memory traffic
-
-Combining CV preprocessing operations removed intermediate buffers and multiple kernel launches.
-
-### Microbenchmark speedup is not application speedup
-
-The YOLO preprocessing kernel became approximately **25.65× faster**, yet end-to-end performance improved by only ~0.2% at Stage 9.
-
-The reason was not the kernel.
-
-It was PCIe transfer.
-
-Stage 10 then followed that bottleneck through pinned memory, overlap, and finally GPU-resident NVDEC decoding, producing a real **24.4% end-to-end latency reduction**.
-
-This is the central lesson from the project:
-
-> Optimizing the current bottleneck often reveals the next one.
+Implementation, benchmark scripts, results, diagrams, and reproduction instructions are in [`cuda/stage10_gpu_resident_pipeline/`](cuda/stage10_gpu_resident_pipeline/).
 
 ---
 
-# Repository Structure
+## Hardware and environment
+
+Experiments were primarily run on:
+
+- NVIDIA Tesla T4
+- CUDA Toolkit 12.8
+- Driver 580.178.04
+- PyTorch 2.11.0 + CUDA 12.8
+- Ultralytics 8.4.183
+- Nsight Compute 2025.1.1
+- Kaggle GPU notebook
+
+---
+
+## Repository structure
 
 ```text
 GPUOpt/
 ├── benchmarks/
 ├── cpu/
+│   └── cpu_blocked.cpp
 ├── cuda/
 │   ├── stage2_coalescing.cu
 │   ├── stage3_tiled.cu
@@ -673,13 +215,18 @@ GPUOpt/
 │   ├── stage7_8_fused_real_video/
 │   ├── stage9_yolo_integration/
 │   └── stage10_gpu_resident_pipeline/
+│       ├── benchmarks/
+│       ├── kernels/
+│       ├── results/
+│       ├── scripts/
+│       └── notebooks/
 └── README.md
 ```
 
 ---
 
-# Current Status
+## Current status
 
-Stages 1–10 are complete.
+**Stages 1–10 are complete.**
 
 The final pipeline uses NVDEC + GPU-resident RGBP + fused CUDA preprocessing, achieving **24.4% lower end-to-end latency** and **110.7 FPS** on the NVIDIA Tesla T4.
