@@ -1,0 +1,2 @@
+gpu,ffmpeg,nvcc,opencv_version,opencv_cuda_devices,ffmpeg_hwaccels,nvdec_path
+Tesla T4,/usr/bin/ffmpeg,/usr/local/cuda/bin/nvcc,4.14.0,0,"vdpau,cuda,vaapi,qsv,drm,opencl,vulkan",PyNvVideoCodec / NVIDIA NVDEC

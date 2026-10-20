@@ -1,0 +1,2 @@
+frames_checked,matching_detection_counts,detection_count_match_rate_pct,matching_class_sequences,class_sequence_match_rate_pct,max_confidence_diff,max_box_coordinate_diff_px,mean_box_coordinate_diff_px,accepted_for_final_pipeline
+100,100,100.0,100,100.0,2.74e-06,0.000214,5e-06,True

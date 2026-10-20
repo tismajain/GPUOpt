@@ -1,0 +1,5 @@
+stage,median_ms,p95_ms,mean_ms
+NVDEC decode,0.2418,0.3278,0.2712
+Fused RGBP preprocess,0.1345,0.1919,0.1445
+YOLO inference,8.7848,9.566,8.8752
+Total,9.1724,10.0445,9.2909

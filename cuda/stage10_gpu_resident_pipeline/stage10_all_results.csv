@@ -1,0 +1,23 @@
+stage,metric,value,unit
+10A,Pageable HtoD median,1.4709,ms
+10A,Pinned HtoD DMA median,0.6598,ms
+10A,Pinned DMA speedup,2.23,x
+10A,Real staged speedup,1.45,x
+10B,Sequential pinned pipeline,9.8045,ms/frame
+10B,Overlapped pipeline,9.0194,ms/frame
+10B,Overlap speedup,1.087,x
+10B,Overlapped throughput,110.87,FPS
+10D,NV12 detection-count match,64.0,%
+10D,NV12 class-sequence match,40.0,%
+10E,RGBP detection-count match,100.0,%
+10E,RGBP class-sequence match,100.0,%
+10E,Max confidence difference,2.74e-06,
+10E,Max box difference,0.000214,px
+10F,NVDEC RGBP total median,9.1724,ms
+10F,NVDEC RGBP throughput,109.02,FPS
+FINAL,OpenCV total median,11.9476,ms
+FINAL,NVDEC total median,9.0324,ms
+FINAL,End-to-end speedup,1.323,x
+FINAL,Latency reduction,24.4,%
+FINAL,Baseline throughput,83.7,FPS
+FINAL,GPU-resident throughput,110.71,FPS

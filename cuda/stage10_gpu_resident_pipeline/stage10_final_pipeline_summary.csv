@@ -1,0 +1,3 @@
+pipeline,decode_median_ms,decode_p95_ms,decode_mean_ms,preprocess_median_ms,preprocess_p95_ms,preprocess_mean_ms,inference_median_ms,inference_p95_ms,inference_mean_ms,total_median_ms,total_p95_ms,total_mean_ms,throughput_fps
+OpenCV CPU,1.7824,2.2649,1.8498,1.6755,2.3933,1.7629,8.4286,11.0953,8.8164,11.9476,15.5667,12.4291,83.7
+NVDEC GPU-resident,0.2619,0.3052,0.2844,0.1319,0.1584,0.1363,8.6284,9.5971,8.7238,9.0324,10.0414,9.1445,110.71
