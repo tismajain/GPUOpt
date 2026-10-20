@@ -634,8 +634,8 @@ GPUOpt/
 ├── stage1_cpu_blocked/
 ├── stage2_coalescing/
 ├── stage3_tiled/
-├── stage4_register_blocked/
-├── stage5_cublas/
+├── stage4_register_blocking/
+├── stage5_cublas_benchmark/
 ├── stage6_profiling/
 ├── stage7_fused_preprocessing/
 ├── stage8_real_video/
