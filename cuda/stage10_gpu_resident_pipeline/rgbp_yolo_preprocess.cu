@@ -27,7 +27,9 @@ __global__ void fused_rgbp_yolo(
     int out_idx = y * out_w + x;
     int plane = out_w * out_h;
 
+    // Letterbox padding
     if (y < pad_top || y >= pad_top + resized_h) {
+
         float p = 114.0f / 255.0f;
 
         output[0 * plane + out_idx] = p;
@@ -39,10 +41,11 @@ __global__ void fused_rgbp_yolo(
 
     int ry = y - pad_top;
 
+    // Half-pixel resize mapping
     float scale_x = (float)src_w / (float)resized_w;
     float scale_y = (float)src_h / (float)resized_h;
 
-    float src_x = (x + 0.5f) * scale_x - 0.5f;
+    float src_x = (x  + 0.5f) * scale_x - 0.5f;
     float src_y = (ry + 0.5f) * scale_y - 0.5f;
 
     int x0 = (int)floorf(src_x);
@@ -73,6 +76,7 @@ __global__ void fused_rgbp_yolo(
 
     #pragma unroll
     for (int c = 0; c < 3; ++c) {
+
         const uint8_t* src = planes[c];
 
         float v00 = (float)src[idx00];
@@ -80,14 +84,20 @@ __global__ void fused_rgbp_yolo(
         float v10 = (float)src[idx10];
         float v11 = (float)src[idx11];
 
-        float top = v00 + wx * (v01 - v00);
-        float bottom = v10 + wx * (v11 - v10);
+        float top =
+            v00 + wx * (v01 - v00);
 
-        float value = top + wy * (bottom - top);
+        float bottom =
+            v10 + wx * (v11 - v10);
 
-        output[c * plane + out_idx] = value / 255.0f;
+        float value =
+            top + wy * (bottom - top);
+
+        output[c * plane + out_idx] =
+            value / 255.0f;
     }
 }
+
 
 extern "C"
 void launch_rgbp_yolo(
@@ -106,7 +116,12 @@ void launch_rgbp_yolo(
         (384 + 15) / 16
     );
 
-    fused_rgbp_yolo<<<grid, block, 0, stream>>>(
+    fused_rgbp_yolo<<<
+        grid,
+        block,
+        0,
+        stream
+    >>>(
         r_plane,
         g_plane,
         b_plane,
