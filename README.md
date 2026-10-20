@@ -1,8 +1,6 @@
 # GPUOpt
 
-A hands-on CUDA optimization project exploring how GPU performance changes across memory access patterns, shared-memory tiling, register blocking, kernel fusion, and real computer-vision workloads.
-
-The project starts from simple matrix multiplication and progressively moves toward application-level optimization in a real YOLO inference pipeline.
+GPUOpt is a staged CUDA performance-engineering project that progresses from cache locality, coalescing, shared-memory tiling, and register blocking to a real GPU-resident YOLO inference pipeline. The final system uses NVDEC and fused CUDA preprocessing to reduce end-to-end latency by **24.4%** and increase throughput from **83.7 to 110.7 FPS** on an NVIDIA Tesla T4.
 
 The main goal is not just to make individual CUDA kernels faster, but to understand **where the bottleneck moves after each optimization**.
 
@@ -15,8 +13,11 @@ The main goal is not just to make individual CUDA kernels faster, but to underst
 - Register-blocked GEMM reached approximately **56% of cuBLAS performance** at 1024×1024 on an NVIDIA Tesla T4.
 - Fused real-video preprocessing achieved a **3.18× speedup** on 1920×1080 @ 50 FPS video.
 - Fused YOLO preprocessing reduced compute from **1.615 ms to 0.063 ms**, a **25.65× kernel-level speedup**.
-- Detection equivalence was validated across 100 frames with **100% matching detection counts**.
-- End-to-end YOLO improvement remained ~**1.002×** because host-to-device transfer became the new bottleneck.
+- Pinned memory reduced raw HtoD DMA latency by **2.23×**.
+- Transfer/inference overlap improved steady-state throughput by approximately **8.7%**.
+- Final NVDEC + GPU-resident preprocessing reduced end-to-end latency from **11.95 ms to 9.03 ms**.
+- Final throughput improved from **83.7 FPS to 110.7 FPS**, a **1.323× end-to-end speedup**.
+- Final RGBP path preserved **100/100 detection-count and class-sequence agreement** across the validation set.
 
 ---
 
@@ -55,7 +56,7 @@ Profiler-dependent metrics were therefore not inferred or fabricated.
 | 7 | Fused CV preprocessing | Combined resize, normalization, and layout conversion |
 | 8 | Real-video preprocessing | 3.18× median speedup on 1920×1080 video |
 | 9 | Real YOLO integration | 25.65× preprocessing-kernel speedup; PCIe became bottleneck |
-| 10 | GPU-resident pipeline | Planned: pinned memory, async copies, overlap, NVDEC, NV12 |
+| 10 | GPU-resident NVDEC pipeline | 24.4% lower end-to-end latency; 83.7 → 110.7 FPS |
 
 ---
 
@@ -522,74 +523,102 @@ This is the main systems-level finding from Stage 9.
 
 # Stage 10 — GPU-Resident Pipeline
 
-The next stage investigates whether the PCIe bottleneck can be reduced or removed.
+Stage 10 removes or hides the host-to-device transfer bottleneck identified in Stage 9.
 
-Planned experiments:
+## 10A — Pinned Host Memory
 
-### 1. Pinned Host Memory
+Page-locked host memory was used to reduce HtoD transfer latency.
 
-Measure whether page-locked memory improves HtoD transfer latency.
+| Path | Median |
+|---|---:|
+| Pageable HtoD | 1.4709 ms |
+| Pinned HtoD DMA | 0.6598 ms |
+| CPU staging + pinned HtoD | 1.0113 ms |
 
-### 2. Asynchronous HtoD Transfer
+Results:
 
-Use:
+- Raw DMA speedup: **2.23×**
+- Real staged-path speedup: **1.45×**
+
+## 10B — Transfer / Inference Overlap
+
+Double buffering and separate CUDA streams were used to overlap transfer of frame N+1 with inference of frame N.
+
+| Pipeline | Time / Frame | Throughput |
+|---|---:|---:|
+| Sequential pinned | 9.8045 ms | 101.99 FPS |
+| Overlapped | 9.0194 ms | 110.87 FPS |
+
+Steady-state throughput improved by approximately **8.7%**.
+
+## 10C — NVDEC GPU Video Decode
+
+The H.264 boxing video was decoded using NVIDIA NVDEC through PyNvVideoCodec, keeping decoded frames GPU-resident and removing full-resolution CPU→GPU frame transfer from the critical path.
 
 ```text
-cudaMemcpyAsync
-```
-
-and CUDA streams to avoid blocking transfer execution.
-
-### 3. Transfer / Inference Overlap
-
-Pipeline consecutive frames:
-
-```text
-Frame N     → inference
-Frame N + 1 → HtoD transfer
-```
-
-to determine whether transfer latency can be hidden behind GPU computation.
-
-### 4. NVDEC GPU Video Decode
-
-Move video decoding from CPU to the GPU:
-
-```text
-compressed video
+H.264 bitstream
       ↓
 NVDEC
       ↓
-GPU-resident frame
+GPU-resident decoded frame
       ↓
 CUDA preprocessing
       ↓
 YOLO
 ```
 
-This avoids transferring full decoded RGB frames over PCIe.
+## 10D — Direct NV12 Fusion Attempt
 
-### 5. NV12-Native Fused Preprocessing
+A direct NV12 → YOLO fused CUDA path was tested.
 
-If NVDEC produces NV12 surfaces, implement:
+Across 100 frames:
+
+- Detection-count agreement: **64%**
+- Class-sequence agreement: **40%**
+
+Because it failed the correctness gate, this implementation was not used in the final system.
+
+## 10E — GPU-Resident RGBP Pipeline
+
+PyNvVideoCodec was configured to produce GPU-resident planar RGB output. The fused CUDA kernel then performs bilinear resize, YOLO letterboxing, uint8 → float32 conversion, normalization, and CHW output without returning the frame to CPU memory.
+
+Final architecture:
 
 ```text
-NV12
- ↓
-color conversion
- ↓
-resize
- ↓
-letterbox
- ↓
-CHW
- ↓
-normalize
- ↓
+H.264
+  ↓
+NVDEC
+  ↓
+GPU RGBP
+  ↓
+fused CUDA preprocessing
+  ↓
 YOLO
 ```
 
-as a GPU-resident fused preprocessing pipeline.
+Correctness across 100 frames:
+
+- Detection-count agreement: **100/100**
+- Class-sequence agreement: **100/100**
+- Maximum confidence difference: **2.74e-06**
+- Maximum box-coordinate difference: **0.000214 px**
+- Mean box-coordinate difference: **0.000005 px**
+
+## 10F — Final End-to-End Benchmark
+
+Both pipelines were benchmarked using the same video, model, inference path, and frame count.
+
+| Pipeline | Decode | Preprocess | Inference | Total | Throughput |
+|---|---:|---:|---:|---:|---:|
+| OpenCV / CPU | 1.7824 ms | 1.6755 ms | 8.4286 ms | **11.9476 ms** | **83.70 FPS** |
+| NVDEC / GPU-resident | 0.2619 ms | 0.1319 ms | 8.6284 ms | **9.0324 ms** | **110.71 FPS** |
+
+Final result:
+
+- **24.40% lower end-to-end latency**
+- **1.323× end-to-end speedup**
+- **83.70 → 110.71 FPS**
+- full detection equivalence across the validation set
 
 ---
 
@@ -615,11 +644,13 @@ Combining CV preprocessing operations removed intermediate buffers and multiple 
 
 ### Microbenchmark speedup is not application speedup
 
-The YOLO preprocessing kernel became approximately **25.65× faster**, yet end-to-end performance improved by only ~0.2%.
+The YOLO preprocessing kernel became approximately **25.65× faster**, yet end-to-end performance improved by only ~0.2% at Stage 9.
 
 The reason was not the kernel.
 
 It was PCIe transfer.
+
+Stage 10 then followed that bottleneck through pinned memory, overlap, and finally GPU-resident NVDEC decoding, producing a real **24.4% end-to-end latency reduction**.
 
 This is the central lesson from the project:
 
@@ -631,21 +662,17 @@ This is the central lesson from the project:
 
 ```text
 GPUOpt/
-├── stage1_cpu_blocked/
-├── stage2_coalescing/
-├── stage3_tiled/
-├── stage4_register_blocking/
-├── stage5_cublas_benchmark/
-├── stage6_profiling/
-├── stage7_fused_preprocessing/
-├── stage8_real_video/
-├── stage9_yolo_integration/
-│   ├── fused_yolo_preprocess.cu
-│   ├── yolo_baseline_300.csv
-│   ├── yolo_preprocess_benchmark.csv
-│   ├── yolo_e2e_benchmark.csv
-│   └── README.md
-├── results/
+├── benchmarks/
+├── cpu/
+├── cuda/
+│   ├── stage2_coalescing.cu
+│   ├── stage3_tiled.cu
+│   ├── stage4_register_blocking.cu
+│   ├── stage5_cublas_benchmark.cu
+│   ├── stage6_profiling/
+│   ├── stage7_8_fused_real_video/
+│   ├── stage9_yolo_integration/
+│   └── stage10_gpu_resident_pipeline/
 └── README.md
 ```
 
@@ -653,6 +680,6 @@ GPUOpt/
 
 # Current Status
 
-Stages 1–9 are complete.
+Stages 1–10 are complete.
 
-Stage 10 focuses on removing or hiding the host-to-device transfer bottleneck using asynchronous transfer and GPU-resident video decoding.
+The final pipeline uses NVDEC + GPU-resident RGBP + fused CUDA preprocessing, achieving **24.4% lower end-to-end latency** and **110.7 FPS** on the NVIDIA Tesla T4.
