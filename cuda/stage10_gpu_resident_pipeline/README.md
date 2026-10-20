@@ -102,34 +102,91 @@ Final result:
 
 Source: [`benchmarks/stage10_final_pipeline.py`](benchmarks/stage10_final_pipeline.py)
 
-## Reproduce
+## Recreate from scratch
 
-Environment used: NVIDIA Tesla T4, CUDA 12.8, PyTorch 2.11.0+cu128, Ultralytics 8.4.183, Kaggle GPU notebook.
+### Requirements
+
+The validated environment was:
+
+- NVIDIA Tesla T4
+- CUDA toolkit 12.8 / `nvcc`
+- CUDA-enabled PyTorch 2.11.0+cu128
+- Ultralytics 8.4.183
+- PyNvVideoCodec
+- OpenCV 4.14
+- FFmpeg with NVIDIA hardware decode support
+
+Install a CUDA-enabled PyTorch build appropriate for your machine first. Then install the remaining Python dependencies:
+
+```bash
+pip install -r cuda/stage10_gpu_resident_pipeline/requirements.txt
+```
+
+Check the environment:
+
+```bash
+python cuda/stage10_gpu_resident_pipeline/scripts/check_environment.py
+```
 
 Build the CUDA kernels:
 
 ```bash
-cd cuda/stage10_gpu_resident_pipeline
-bash scripts/build_cuda.sh
+bash cuda/stage10_gpu_resident_pipeline/scripts/build_cuda.sh
 ```
 
-Then run the relevant benchmark from the repository root, for example:
+### Input workload
+
+The published result used a real H.264 boxing video with:
+
+```text
+1920×1080
+50 FPS
+H.264
+```
+
+The final CUDA preprocessing kernel is validated for **1920×1080 input → 640×384 YOLO input**. The benchmark now accepts the video path as a command-line argument instead of relying on a Kaggle-specific hard-coded path.
+
+### Run the final benchmark
 
 ```bash
-python cuda/stage10_gpu_resident_pipeline/benchmarks/stage10_final_pipeline.py
+python cuda/stage10_gpu_resident_pipeline/benchmarks/stage10_final_pipeline.py \
+  --video /path/to/video.mp4 \
+  --frames 300 \
+  --warmup 30 \
+  --output cuda/stage10_gpu_resident_pipeline/results/stage10_final_pipeline_rerun.csv
 ```
 
-The scripts expect the boxing video at the Kaggle dataset path used during the experiments and require PyNvVideoCodec for the NVDEC path.
+Or use the one-command wrapper:
+
+```bash
+bash cuda/stage10_gpu_resident_pipeline/scripts/recreate_stage10.sh /path/to/video.mp4
+```
+
+The benchmark uses **30 warmup frames + 300 measured frames** and synchronizes CUDA around measured pipeline stages.
+
+### Expected result on a comparable T4
+
+The exact numbers will vary with driver version, clocks, thermal state, background load, and library versions, but the original run measured:
+
+```text
+OpenCV / CPU path       ~11.95 ms median
+NVDEC GPU-resident path ~ 9.03 ms median
+End-to-end speedup      ~ 1.32×
+Latency reduction       ~24.4%
+```
+
+Reproduction should focus on the same qualitative result: GPU-resident decode + fused preprocessing removes CPU decode/full-frame PCIe transfer from the critical path and materially improves the full pipeline, not just a single CUDA kernel.
 
 ## Layout
 
 ```text
 stage10_gpu_resident_pipeline/
 ├── README.md
+├── requirements.txt
 ├── benchmarks/   # 10A-10F and final benchmark scripts
 ├── kernels/      # NV12 experiment + validated RGBP CUDA kernel
 ├── results/      # benchmark/correctness CSV summaries
-├── scripts/      # CUDA build and environment checks
+├── scripts/      # build, environment check, and recreation helper
 └── notebooks/    # extracted Stage 10 notebook and cell map
 ```
 
