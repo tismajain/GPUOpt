@@ -185,6 +185,52 @@ Implementation, benchmark scripts, results, diagrams, and reproduction instructi
 
 ---
 
+## Reproduce the project
+
+The repo now includes stage runners under [`scripts/`](scripts/) and a detailed guide in [`REPRODUCING.md`](REPRODUCING.md).
+
+Install the shared Python dependencies for the video/YOLO stages:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the standalone CPU/CUDA stages:
+
+```bash
+bash scripts/run_stage1.sh
+bash scripts/run_stage2.sh
+bash scripts/run_stage3.sh
+bash scripts/run_stage4.sh
+bash scripts/run_stage5.sh
+```
+
+Stage 6 requires Nsight Compute hardware-counter access:
+
+```bash
+bash scripts/run_stage6_ncu.sh
+```
+
+On Kaggle this is expected to fail with `ERR_NVGPUCTRPERM`; use a machine with performance counters enabled.
+
+For the real-video stages, provide a **1920×1080 H.264 video**. The original benchmark video was 50 FPS:
+
+```bash
+bash scripts/run_stage7_8.sh /path/to/video.mp4
+bash scripts/run_stage9.sh /path/to/video.mp4 yolov8n.pt
+bash scripts/run_stage10.sh /path/to/video.mp4 yolov8n.pt
+```
+
+Or run the full sequence (Stage 6 excluded because profiler permissions are machine-dependent):
+
+```bash
+bash scripts/run_all.sh /path/to/video.mp4 yolov8n.pt
+```
+
+Reference results on the original Tesla T4 are documented in [`REPRODUCING.md`](REPRODUCING.md). Exact absolute timings can vary with GPU clocks, CUDA/driver versions, codec behavior, and system load.
+
+---
+
 ## Hardware and environment
 
 Experiments were primarily run on:
@@ -220,6 +266,11 @@ GPUOpt/
 │       ├── results/
 │       ├── scripts/
 │       └── notebooks/
+├── scripts/
+│   ├── run_stage1.sh ... run_stage10.sh
+│   └── run_all.sh
+├── REPRODUCING.md
+├── requirements.txt
 └── README.md
 ```
 
