@@ -1,0 +1,2 @@
+# Shared Python dependencies for the video/YOLO stages.
+-r cuda/stage10_gpu_resident_pipeline/requirements.txt
